@@ -4,6 +4,12 @@ import (
 	"context"
 	"crypto/elliptic"
 	"crypto/tls"
+	"errors"
+	"log"
+	"net/http"
+	"testing"
+	"time"
+
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/cloud"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
@@ -12,18 +18,17 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/security/keyvault/azcertificates"
 	"github.com/Azure/azure-sdk-for-go/sdk/security/keyvault/azkeys"
 	"github.com/Azure/azure-sdk-for-go/sdk/security/keyvault/azsecrets"
-	"log"
-	"net/http"
-	"testing"
-	"time"
+	"github.com/google/uuid"
 )
 
 func TestSecret(t *testing.T) {
 	//given
+	randomSuffix := uuid.New().String()
 	httpClient := PrepareClient()
 	secretDatabase := "database"
 	secretUsername := "username"
 	secretPassword := "password"
+	secretToDelete := "delete" + randomSuffix
 	database := "db"
 	username := "admin"
 	password := "s3cr3t"
@@ -43,7 +48,9 @@ func TestSecret(t *testing.T) {
 	SetSecret(client, secretDatabase, database)
 	SetSecret(client, secretUsername, username)
 	SetSecret(client, secretPassword, password)
-
+	SetSecret(client, secretToDelete, password)
+	DeleteSecret(client, secretToDelete)
+	PurgeSecret(client, secretToDelete)
 	//when
 	gotDatabase, err := Secret(client, secretDatabase)
 	if err != nil {
@@ -67,6 +74,15 @@ func TestSecret(t *testing.T) {
 	}
 	if gotPassword != password {
 		t.Errorf("got %q, wanted %q", gotPassword, password)
+	}
+	_, err = Secret(client, secretToDelete)
+	if err != nil {
+		var httpErr *azcore.ResponseError
+		if errors.As(err, &httpErr) {
+			if httpErr.StatusCode != http.StatusNotFound {
+				t.Fail()
+			}
+		}
 	}
 }
 
@@ -159,6 +175,20 @@ func TestCertificate(t *testing.T) {
 	}
 }
 
+func DeleteSecret(client *azsecrets.Client, name string) {
+	_, err := client.DeleteSecret(context.TODO(), name, nil)
+	if err != nil {
+		log.Fatalf("failed to delete a secret: %v", err)
+	}
+}
+
+func PurgeSecret(client *azsecrets.Client, name string) {
+	_, err := client.PurgeDeletedSecret(context.TODO(), name, nil)
+	if err != nil {
+		log.Fatalf("failed to purge a secret: %v", err)
+	}
+}
+
 func SetSecret(client *azsecrets.Client, name string, value string) {
 	_, err := client.SetSecret(context.TODO(), name, azsecrets.SetSecretParameters{Value: &value}, nil)
 	if err != nil {
@@ -207,7 +237,7 @@ func CreateCertificate(client *azcertificates.Client, name string, subject strin
 }
 
 /*
-	Ignore SSL error caused by the self-signed certificate.
+Ignore SSL error caused by the self-signed certificate.
 */
 func PrepareClient() http.Client {
 	customTransport := http.DefaultTransport.(*http.Transport).Clone()
@@ -225,7 +255,7 @@ func KeyOperations() []*azkeys.KeyOperation {
 }
 
 /*
-	Fake token used for bypassing the fake authentication of Lowkey Vault
+Fake token used for bypassing the fake authentication of Lowkey Vault
 */
 type FakeCredential struct{}
 
